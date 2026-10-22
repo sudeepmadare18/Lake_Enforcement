@@ -13,120 +13,74 @@ st.set_page_config(
 )
 
 st.title("🌊 AI-Based Lake Enforcement System")
-st.caption(
-    "AI-based analysis of lake images for pollution indicators, "
-    "water clarity, algae presence, and enforcement alerts"
-)
+st.caption("AI-based lake image analysis for pollution indicators and enforcement alerts")
 
-# ---------------- Sidebar ----------------
-st.sidebar.title("⚙️ Enforcement Settings")
+st.sidebar.title("⚙️ Settings")
+algae_sensitivity = st.sidebar.slider("Algae Sensitivity", 1, 10, 5)
+murky_sensitivity = st.sidebar.slider("Murky Water Sensitivity", 1, 10, 5)
 
-algae_sensitivity = st.sidebar.slider(
-    "Algae Detection Sensitivity",
-    min_value=1,
-    max_value=10,
-    value=5
-)
-
-murky_sensitivity = st.sidebar.slider(
-    "Murky Water Sensitivity",
-    min_value=1,
-    max_value=10,
-    value=5
-)
-
-# ---------------- Upload image ----------------
-uploaded_file = st.file_uploader(
-    "Upload a lake image",
-    type=["jpg", "jpeg", "png"]
-)
+uploaded_file = st.file_uploader("Upload a lake image", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-
     image = Image.open(uploaded_file).convert("RGB")
-    image_array = np.array(image)
 
-    # Resize very large images for faster processing
-    max_size = 1000
-    if max(image.size) > max_size:
-        image.thumbnail((max_size, max_size))
-        image_array = np.array(image)
+    if max(image.size) > 1000:
+        image.thumbnail((1000, 1000))
 
-    height, width, _ = image_array.shape
-    total_pixels = height * width
+    arr = np.array(image)
+    total_pixels = arr.shape[0] * arr.shape[1]
 
-    # Separate color channels
-    red_channel = image_array[:, :, 0].astype(float)
-    green_channel = image_array[:, :, 1].astype(float)
-    blue_channel = image_array[:, :, 2].astype(float)
+    r = arr[:, :, 0].astype(int)
+    g = arr[:, :, 1].astype(int)
+    b = arr[:, :, 2].astype(int)
 
-    # ---------------- Algae detection ----------------
-    # Green pixels: green is higher than red and blue
-    algae_mask = (
-        (green_channel > red_channel + 20) &
-        (green_channel > blue_channel + 20)
-    )
+    algae_mask = (g > r + 20) & (g > b + 20)
+    algae_percent = (np.sum(algae_mask) / total_pixels) * 100
 
-    algae_percentage = (np.sum(algae_mask) / total_pixels) * 100
-
-    # ---------------- Water clarity ----------------
-    brightness = np.mean(image_array)
-
-    # Lower brightness means darker/murkier water
+    brightness = np.mean(arr)
     clarity_score = 100 - brightness
 
-    # ---------------- Pollution indicator ----------------
-    # Brownish/muddy water: red and green higher than blue
-    muddy_mask = (
-        (red_channel > blue_channel + 25) &
-        (green_channel > blue_channel + 15)
-    )
+    muddy_mask = (r > b + 25) & (g > b + 15)
+    muddy_percent = (np.sum(muddy_mask) / total_pixels) * 100
 
-    muddy_percentage = (np.sum(muddy_mask) / total_pixels) * 100
-
-    # ---------------- Create alerts ----------------
     alerts = []
 
-    algae_threshold = algae_sensitivity * 3
-    murky_threshold = 100 - (murky_sensitivity * 5)
-
-    if algae_percentage > algae_threshold:
+    if algae_percent > algae_sensitivity * 3:
         alerts.append({
             "Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "Violation Type": "Possible Algae Growth",
+            "Violation": "Possible Algae Growth",
             "Severity": "High",
-            "Detected Value": f"{algae_percentage:.2f}% green coverage",
-            "Recommended Action": "Send inspection team and collect water sample"
+            "Value": f"{algae_percent:.2f}% green coverage",
+            "Action": "Send inspection team and collect water sample"
         })
 
-    if clarity_score > murky_threshold:
+    if clarity_score > 100 - murky_sensitivity * 5:
         alerts.append({
             "Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "Violation Type": "Murky / Low-Clarity Water",
+            "Violation": "Murky / Low-Clarity Water",
             "Severity": "Medium",
-            "Detected Value": f"Clarity score: {clarity_score:.1f}",
-            "Recommended Action": "Check turbidity and possible contamination"
+            "Value": f"Clarity score: {clarity_score:.1f}",
+            "Action": "Check turbidity and possible contamination"
         })
 
-    if muddy_percentage > 30:
+    if muddy_percent > 30:
         alerts.append({
             "Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "Violation Type": "Possible Muddy / Sediment Pollution",
+            "Violation": "Possible Muddy / Sediment Pollution",
             "Severity": "Medium",
-            "Detected Value": f"{muddy_percentage:.2f}% muddy-color coverage",
-            "Recommended Action": "Inspect surrounding construction or soil erosion"
+            "Value": f"{muddy_percent:.2f}% muddy coverage",
+            "Action": "Inspect nearby construction or soil erosion"
         })
 
     if not alerts:
         alerts.append({
             "Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "Violation Type": "No Major Violation Detected",
+            "Violation": "No Major Violation Detected",
             "Severity": "Low",
-            "Detected Value": "Lake image appears normal",
-            "Recommended Action": "Continue routine monitoring"
+            "Value": "Lake image appears normal",
+            "Action": "Continue routine monitoring"
         })
 
-    # ---------------- Show images ----------------
     col1, col2 = st.columns(2)
 
     with col1:
@@ -135,65 +89,35 @@ if uploaded_file is not None:
 
     with col2:
         st.subheader("🧠 AI Analysis")
-
-        # Create a simple analysis visualization
-        analysis_image = image_array.copy()
-
-        # Highlight algae-like areas in red
-        analysis_image[algae_mask] = [255, 0, 0]
-
-        st.image(analysis_image, use_container_width=True)
+        analysis = arr.copy()
+        analysis[algae_mask] = [255, 0, 0]
+        st.image(analysis, use_container_width=True)
         st.caption("Red areas indicate possible algae-like green coverage")
 
-    # ---------------- Metrics ----------------
     st.subheader("📊 Lake Monitoring Metrics")
 
-    m1, m2, m3, m4 = st.columns(4)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Algae Coverage", f"{algae_percent:.2f}%")
+    c2.metric("Clarity Score", f"{clarity_score:.1f}")
+    c3.metric("Muddy Coverage", f"{muddy_percent:.2f}%")
+    c4.metric("Alerts", len(alerts))
 
-    m1.metric(
-        "Algae Coverage",
-        f"{algae_percentage:.2f}%"
-    )
-
-    m2.metric(
-        "Water Clarity Score",
-        f"{clarity_score:.1f}"
-    )
-
-    m3.metric(
-        "Muddy Color Coverage",
-        f"{muddy_percentage:.2f}%"
-    )
-
-    m4.metric(
-        "Alerts Generated",
-        len(alerts)
-    )
-
-    # ---------------- Alerts table ----------------
-    st.subheader("🚨 Lake Enforcement Alerts")
-
+    st.subheader("🚨 Enforcement Alerts")
     alert_df = pd.DataFrame(alerts)
-
     st.dataframe(alert_df, use_container_width=True)
 
-    # ---------------- Download report ----------------
-    csv_data = alert_df.to_csv(index=False).encode()
-
     st.download_button(
-        label="⬇️ Download Enforcement Report",
-        data=csv_data,
-        file_name=f"lake_enforcement_report_{int(time.time())}.csv",
+        "⬇️ Download Enforcement Report",
+        data=alert_df.to_csv(index=False).encode(),
+        file_name=f"lake_report_{int(time.time())}.csv",
         mime="text/csv"
     )
 
 else:
-    st.info("Upload a lake image to begin AI-based enforcement analysis.")
+    st.info("Upload a lake image to begin analysis.")
 
-# ---------------- Footer ----------------
 st.markdown("---")
 st.caption(
-    "Demo system using image-processing-based lake analysis. "
-    "In a full deployment, this can be connected to drone cameras, CCTV, "
-    "GPS, water-quality sensors, and a municipal monitoring dashboard."
+    "Demo system using AI-based image processing. "
+    "In full deployment, this can connect to drones, CCTV, GPS, and municipal dashboards."
 )
