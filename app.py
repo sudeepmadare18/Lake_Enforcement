@@ -1,7 +1,6 @@
 import time
 from datetime import datetime
 
-import cv2
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -15,36 +14,26 @@ st.set_page_config(
 
 st.title("🌊 AI-Based Lake Enforcement System")
 st.caption(
-    "Computer-vision based monitoring of lakes for human activity, "
-    "water discoloration, and possible pollution indicators"
+    "AI-based analysis of lake images for pollution indicators, "
+    "water clarity, algae presence, and enforcement alerts"
 )
 
 # ---------------- Sidebar ----------------
 st.sidebar.title("⚙️ Enforcement Settings")
 
-person_conf = st.sidebar.slider(
-    "Human Detection Sensitivity",
-    min_value=0.1,
-    max_value=0.9,
-    value=0.4,
-    step=0.05
-)
-
-pollution_sensitivity = st.sidebar.slider(
-    "Pollution Detection Sensitivity",
+algae_sensitivity = st.sidebar.slider(
+    "Algae Detection Sensitivity",
     min_value=1,
     max_value=10,
     value=5
 )
 
-# ---------------- Load HOG people detector ----------------
-@st.cache_resource
-def load_person_detector():
-    hog = cv2.HOGDescriptor()
-    hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
-    return hog
-
-hog = load_person_detector()
+murky_sensitivity = st.sidebar.slider(
+    "Murky Water Sensitivity",
+    min_value=1,
+    max_value=10,
+    value=5
+)
 
 # ---------------- Upload image ----------------
 uploaded_file = st.file_uploader(
@@ -53,154 +42,150 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file is not None:
-    file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
-    image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
-    # Resize large images for faster processing
-    max_width = 900
-    if image.shape[1] > max_width:
-        scale = max_width / image.shape[1]
-        image = cv2.resize(image, (max_width, int(image.shape[0] * scale)))
+    image = Image.open(uploaded_file).convert("RGB")
+    image_array = np.array(image)
 
-    original_image = image.copy()
+    # Resize very large images for faster processing
+    max_size = 1000
+    if max(image.size) > max_size:
+        image.thumbnail((max_size, max_size))
+        image_array = np.array(image)
 
-    alerts = []
+    height, width, _ = image_array.shape
+    total_pixels = height * width
 
-    # ---------------- 1. Human activity detection ----------------
-    resized = cv2.resize(image, (640, 480))
-    gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+    # Separate color channels
+    red_channel = image_array[:, :, 0].astype(float)
+    green_channel = image_array[:, :, 1].astype(float)
+    blue_channel = image_array[:, :, 2].astype(float)
 
-    boxes, weights = hog.detectMultiScale(
-        gray,
-        winStride=(8, 8),
-        padding=(4, 4),
-        scale=1.05
+    # ---------------- Algae detection ----------------
+    # Green pixels: green is higher than red and blue
+    algae_mask = (
+        (green_channel > red_channel + 20) &
+        (green_channel > blue_channel + 20)
     )
 
-    person_count = 0
+    algae_percentage = (np.sum(algae_mask) / total_pixels) * 100
 
-    for (x, y, w, h), weight in zip(boxes, weights):
-        if weight >= person_conf:
-            person_count += 1
+    # ---------------- Water clarity ----------------
+    brightness = np.mean(image_array)
 
-            # Convert coordinates back to original image size
-            scale_x = image.shape[1] / 640
-            scale_y = image.shape[0] / 480
+    # Lower brightness means darker/murkier water
+    clarity_score = 100 - brightness
 
-            x1 = int(x * scale_x)
-            y1 = int(y * scale_y)
-            x2 = int((x + w) * scale_x)
-            y2 = int((y + h) * scale_y)
+    # ---------------- Pollution indicator ----------------
+    # Brownish/muddy water: red and green higher than blue
+    muddy_mask = (
+        (red_channel > blue_channel + 25) &
+        (green_channel > blue_channel + 15)
+    )
 
-            cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 3)
-            cv2.putText(
-                image,
-                "Person",
-                (x1, y1 - 10),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
-                (0, 255, 0),
-                2
-            )
+    muddy_percentage = (np.sum(muddy_mask) / total_pixels) * 100
 
-    if person_count > 0:
+    # ---------------- Create alerts ----------------
+    alerts = []
+
+    algae_threshold = algae_sensitivity * 3
+    murky_threshold = 100 - (murky_sensitivity * 5)
+
+    if algae_percentage > algae_threshold:
         alerts.append({
             "Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "Violation": "Human activity detected",
-            "Severity": "Medium" if person_count > 2 else "Low",
-            "Details": f"{person_count} person(s) detected near lake area",
-            "Recommended Action": "Monitor activity for safety or unauthorized behavior"
-        })
-
-    # ---------------- 2. Water pollution indicator ----------------
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-
-    # Green algae-like color range
-    lower_green = np.array([35, 60, 60])
-    upper_green = np.array([85, 255, 255])
-    green_mask = cv2.inRange(hsv, lower_green, upper_green)
-
-    green_pixels = cv2.countNonZero(green_mask)
-    total_pixels = image.shape[0] * image.shape[1]
-    green_percentage = (green_pixels / total_pixels) * 100
-
-    algae_threshold = pollution_sensitivity * 2
-
-    if green_percentage > algae_threshold:
-        cv2.putText(
-            image,
-            "Possible Algae / Pollution",
-            (30, 60),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1.1,
-            (0, 0, 255),
-            3
-        )
-
-        alerts.append({
-            "Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "Violation": "Possible algae growth / water pollution",
+            "Violation Type": "Possible Algae Growth",
             "Severity": "High",
-            "Details": f"Green region coverage: {green_percentage:.2f}%",
+            "Detected Value": f"{algae_percentage:.2f}% green coverage",
             "Recommended Action": "Send inspection team and collect water sample"
         })
 
-    # ---------------- 3. Dark / murky water indicator ----------------
-    gray_full = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    darkness = 100 - np.mean(gray_full)
-
-    if darkness > 55:
+    if clarity_score > murky_threshold:
         alerts.append({
             "Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "Violation": "Murky or low-visibility water detected",
+            "Violation Type": "Murky / Low-Clarity Water",
             "Severity": "Medium",
-            "Details": f"Water clarity indicator: {darkness:.1f}",
+            "Detected Value": f"Clarity score: {clarity_score:.1f}",
             "Recommended Action": "Check turbidity and possible contamination"
         })
 
-    # ---------------- Show results ----------------
+    if muddy_percentage > 30:
+        alerts.append({
+            "Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "Violation Type": "Possible Muddy / Sediment Pollution",
+            "Severity": "Medium",
+            "Detected Value": f"{muddy_percentage:.2f}% muddy-color coverage",
+            "Recommended Action": "Inspect surrounding construction or soil erosion"
+        })
+
+    if not alerts:
+        alerts.append({
+            "Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "Violation Type": "No Major Violation Detected",
+            "Severity": "Low",
+            "Detected Value": "Lake image appears normal",
+            "Recommended Action": "Continue routine monitoring"
+        })
+
+    # ---------------- Show images ----------------
     col1, col2 = st.columns(2)
 
     with col1:
         st.subheader("📸 Uploaded Lake Image")
-        st.image(
-            cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB),
-            use_container_width=True
-        )
+        st.image(image, use_container_width=True)
 
     with col2:
-        st.subheader("🤖 AI Analysis Result")
-        st.image(
-            cv2.cvtColor(image, cv2.COLOR_BGR2RGB),
-            use_container_width=True
-        )
+        st.subheader("🧠 AI Analysis")
+
+        # Create a simple analysis visualization
+        analysis_image = image_array.copy()
+
+        # Highlight algae-like areas in red
+        analysis_image[algae_mask] = [255, 0, 0]
+
+        st.image(analysis_image, use_container_width=True)
+        st.caption("Red areas indicate possible algae-like green coverage")
 
     # ---------------- Metrics ----------------
     st.subheader("📊 Lake Monitoring Metrics")
 
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("People Detected", person_count)
-    m2.metric("Green Coverage", f"{green_percentage:.2f}%")
-    m3.metric("Water Clarity Score", f"{darkness:.1f}")
-    m4.metric("Alerts Generated", len(alerts))
 
-    # ---------------- Alerts ----------------
+    m1.metric(
+        "Algae Coverage",
+        f"{algae_percentage:.2f}%"
+    )
+
+    m2.metric(
+        "Water Clarity Score",
+        f"{clarity_score:.1f}"
+    )
+
+    m3.metric(
+        "Muddy Color Coverage",
+        f"{muddy_percentage:.2f}%"
+    )
+
+    m4.metric(
+        "Alerts Generated",
+        len(alerts)
+    )
+
+    # ---------------- Alerts table ----------------
     st.subheader("🚨 Lake Enforcement Alerts")
 
-    if alerts:
-        alert_df = pd.DataFrame(alerts)
-        st.dataframe(alert_df, use_container_width=True)
+    alert_df = pd.DataFrame(alerts)
 
-        csv_data = alert_df.to_csv(index=False).encode()
+    st.dataframe(alert_df, use_container_width=True)
 
-        st.download_button(
-            label="⬇️ Download Enforcement Report",
-            data=csv_data,
-            file_name=f"lake_enforcement_report_{int(time.time())}.csv",
-            mime="text/csv"
-        )
-    else:
-        st.success("No major enforcement issue detected in this image.")
+    # ---------------- Download report ----------------
+    csv_data = alert_df.to_csv(index=False).encode()
+
+    st.download_button(
+        label="⬇️ Download Enforcement Report",
+        data=csv_data,
+        file_name=f"lake_enforcement_report_{int(time.time())}.csv",
+        mime="text/csv"
+    )
 
 else:
     st.info("Upload a lake image to begin AI-based enforcement analysis.")
@@ -208,7 +193,7 @@ else:
 # ---------------- Footer ----------------
 st.markdown("---")
 st.caption(
-    "Demo system using OpenCV computer vision. "
+    "Demo system using image-processing-based lake analysis. "
     "In a full deployment, this can be connected to drone cameras, CCTV, "
-    "GPS, and a municipal lake-monitoring dashboard."
+    "GPS, water-quality sensors, and a municipal monitoring dashboard."
 )
