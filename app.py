@@ -13,34 +13,42 @@ st.set_page_config(
     layout="wide"
 )
 
+# ---------------- CSS ----------------
 st.markdown("""
 <style>
     .main-title {
         font-size: 2.3rem;
         font-weight: 800;
-        color: #0f4c81;
+        color: #4fc3f7;
     }
     .sub-title {
-        color: #555;
+        color: #cccccc;
         font-size: 1.05rem;
     }
-    .alert-high {
-        background-color: #ffe5e5;
-        border-left: 6px solid #d9534f;
+    .alert-high,
+    .alert-medium,
+    .alert-low {
+        color: #111111 !important;
         padding: 14px;
         border-radius: 10px;
+        margin-bottom: 12px;
+    }
+    .alert-high {
+        background-color: #ffe5e5 !important;
+        border-left: 6px solid #d9534f !important;
     }
     .alert-medium {
-        background-color: #fff6e0;
-        border-left: 6px solid #f0ad4e;
-        padding: 14px;
-        border-radius: 10px;
+        background-color: #fff6e0 !important;
+        border-left: 6px solid #f0ad4e !important;
     }
     .alert-low {
-        background-color: #e8f6ff;
-        border-left: 6px solid #5bc0de;
-        padding: 14px;
-        border-radius: 10px;
+        background-color: #e8f6ff !important;
+        border-left: 6px solid #5bc0de !important;
+    }
+    .alert-high b,
+    .alert-medium b,
+    .alert-low b {
+        color: #111111 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -75,17 +83,9 @@ input_source = st.sidebar.selectbox(
     ["Drone Image", "CCTV Camera", "Satellite Image"]
 )
 
-algae_sensitivity = st.sidebar.slider(
-    "Algae Detection Sensitivity", 1, 10, 5
-)
-
-murky_sensitivity = st.sidebar.slider(
-    "Murky Water Sensitivity", 1, 10, 5
-)
-
-waste_sensitivity = st.sidebar.slider(
-    "Floating Waste Sensitivity", 1, 10, 5
-)
+algae_sensitivity = st.sidebar.slider("Algae Detection Sensitivity", 1, 10, 5)
+murky_sensitivity = st.sidebar.slider("Murky Water Sensitivity", 1, 10, 5)
+waste_sensitivity = st.sidebar.slider("Floating Waste Sensitivity", 1, 10, 5)
 
 st.sidebar.markdown("---")
 st.sidebar.header("📡 IoT Sensor Simulation")
@@ -128,17 +128,11 @@ if uploaded_file is not None:
     muddy_mask = (r > b + 25) & (g > b + 15)
     muddy_percent = (np.sum(muddy_mask) / total_pixels) * 100
 
-    # Floating waste detection:
-    # Dark, low-brightness regions surrounded by water-like pixels
     gray = np.mean(arr, axis=2)
     waste_mask = gray < 60
-
-    # Remove very large dark regions (shadow/land) using simple filtering
-    waste_pixels = np.sum(waste_mask)
-    waste_percent = (waste_pixels / total_pixels) * 100
+    waste_percent = (np.sum(waste_mask) / total_pixels) * 100
 
     waste_threshold = 12 - waste_sensitivity
-
     waste_detected = waste_percent > waste_threshold
 
     # ---------------- Sensor analysis ----------------
@@ -163,18 +157,18 @@ if uploaded_file is not None:
     waste_risk = 20 if waste_detected else 0
     sensor_risk = min(len(sensor_alerts) * 5, 10)
 
-    risk_score = round(algae_risk + clarity_risk + muddy_risk + waste_risk + sensor_risk, 1)
+    risk_score = round(
+        algae_risk + clarity_risk + muddy_risk + waste_risk + sensor_risk,
+        1
+    )
     risk_score = min(risk_score, 100)
 
     if risk_score >= 70:
         risk_level = "HIGH RISK"
-        risk_color = "🔴"
     elif risk_score >= 40:
         risk_level = "MEDIUM RISK"
-        risk_color = "🟠"
     else:
         risk_level = "LOW RISK"
-        risk_color = "🟢"
 
     # ---------------- Generate alerts ----------------
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -300,11 +294,7 @@ if uploaded_file is not None:
             st.subheader("🧠 AI Detection Overlay")
 
             analysis_image = arr.copy()
-
-            # Highlight algae in red
             analysis_image[algae_mask] = [255, 0, 0]
-
-            # Highlight possible waste in blue
             analysis_image[waste_mask] = [0, 0, 255]
 
             st.image(analysis_image, use_container_width=True)
@@ -448,7 +438,6 @@ if uploaded_file is not None:
         s4.metric("Dissolved Oxygen", f"{dissolved_oxygen} mg/L", "Normal: above 4")
 
         st.subheader("💧 Water Level")
-
         st.progress(water_level / 100)
         st.write(f"Current lake water level: **{water_level}%**")
 
@@ -464,8 +453,18 @@ if uploaded_file is not None:
 
         sensor_chart = pd.DataFrame(
             {
-                "Parameter": ["pH", "Turbidity", "Dissolved Oxygen", "Water Level"],
-                "Value": [ph_value, turbidity, dissolved_oxygen, water_level]
+                "Parameter": [
+                    "pH",
+                    "Turbidity",
+                    "Dissolved Oxygen",
+                    "Water Level"
+                ],
+                "Value": [
+                    ph_value,
+                    turbidity,
+                    dissolved_oxygen,
+                    water_level
+                ]
             }
         )
 
