@@ -2,3 +2,5 @@ streamlit
 numpy
 pillow
 pandas
+opencv-python-headless
+scikit-learn
