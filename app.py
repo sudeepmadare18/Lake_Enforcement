@@ -1,65 +1,44 @@
 import time
 from datetime import datetime
 
+import cv2
 import numpy as np
 import pandas as pd
 import streamlit as st
-from PIL import Image, ImageFilter
+from PIL import Image
+from sklearn.ensemble import IsolationForest
 
 st.set_page_config(
-    page_title="AI Lake Enforcement System",
+    page_title="Advanced AI Lake Enforcement System",
     page_icon="🌊",
     layout="wide"
 )
 
 st.markdown("""
 <style>
-    .main-title {
-        font-size: 2.3rem;
-        font-weight: 800;
-        color: #4fc3f7;
-    }
-    .sub-title {
-        color: #cccccc;
-        font-size: 1.05rem;
-    }
-    .alert-high,
-    .alert-medium,
-    .alert-low {
-        color: #111111 !important;
-        padding: 14px;
-        border-radius: 10px;
-        margin-bottom: 12px;
-    }
-    .alert-high {
-        background-color: #ffe5e5 !important;
-        border-left: 6px solid #d9534f !important;
-    }
-    .alert-medium {
-        background-color: #fff6e0 !important;
-        border-left: 6px solid #f0ad4e !important;
-    }
-    .alert-low {
-        background-color: #e8f6ff !important;
-        border-left: 6px solid #5bc0de !important;
-    }
-    .alert-high b,
-    .alert-medium b,
-    .alert-low b {
-        color: #111111 !important;
-    }
+.main-title {font-size:2.4rem;font-weight:800;color:#4fc3f7;}
+.sub-title {color:#cccccc;font-size:1.05rem;}
+.alert-high,.alert-medium,.alert-low {
+color:#111 !important;padding:14px;border-radius:10px;margin-bottom:12px;}
+.alert-high {background:#ffe5e5 !important;border-left:6px solid #d9534f !important;}
+.alert-medium {background:#fff6e0 !important;border-left:6px solid #f0ad4e !important;}
+.alert-low {background:#e8f6ff !important;border-left:6px solid #5bc0de !important;}
+.alert-high b,.alert-medium b,.alert-low b {color:#111 !important;}
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="main-title">🌊 AI-Based Lake Enforcement System</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title">🌊 Advanced AI Lake Enforcement System</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="sub-title">AI image analysis for algae, water pollution, '
-    'floating waste, and lake enforcement alerts</div>',
+    '<div class="sub-title">Lake segmentation, pollution analysis, encroachment '
+    'detection, IoT anomaly detection, and enforcement workflow</div>',
     unsafe_allow_html=True
 )
 
-if "alert_history" not in st.session_state:
-    st.session_state.alert_history = []
+if "alerts" not in st.session_state:
+    st.session_state.alerts = []
+
+if "cases" not in st.session_state:
+    st.session_state.cases = []
 
 # ---------------- Sidebar ----------------
 st.sidebar.header("🏞️ Lake Profile")
@@ -70,174 +49,304 @@ latitude = st.sidebar.number_input("Latitude", value=12.9716, format="%.4f")
 longitude = st.sidebar.number_input("Longitude", value=77.5946, format="%.4f")
 
 st.sidebar.markdown("---")
-st.sidebar.header("⚙️ AI Settings")
+st.sidebar.header("⚙️ AI Configuration")
 
 input_source = st.sidebar.selectbox(
     "Monitoring Source",
     ["Drone Image", "CCTV Camera", "Satellite Image"]
 )
 
-algae_sensitivity = st.sidebar.slider("Algae Sensitivity", 1, 10, 5)
-waste_sensitivity = st.sidebar.slider("Waste Sensitivity", 1, 10, 5)
-murky_sensitivity = st.sidebar.slider("Murky Water Sensitivity", 1, 10, 5)
+algae_threshold = st.sidebar.slider("Algae Threshold (%)", 1, 50, 10)
+waste_threshold = st.sidebar.slider("Waste Threshold (%)", 1, 50, 8)
+encroachment_threshold = st.sidebar.slider("Encroachment Threshold (%)", 1, 50, 10)
 
 st.sidebar.markdown("---")
-st.sidebar.header("📡 IoT Sensor Simulation")
+st.sidebar.header("📡 IoT Sensor Inputs")
 
 ph_value = st.sidebar.slider("pH Level", 0.0, 14.0, 7.2, 0.1)
 turbidity = st.sidebar.slider("Turbidity (NTU)", 0, 100, 25)
 dissolved_oxygen = st.sidebar.slider("Dissolved Oxygen (mg/L)", 0.0, 15.0, 6.5, 0.1)
+temperature = st.sidebar.slider("Temperature (°C)", 0.0, 50.0, 27.0, 0.5)
 water_level = st.sidebar.slider("Water Level (%)", 0, 100, 78)
 
-# ---------------- Upload ----------------
-st.header("📤 Upload Lake Image")
+# ---------------- Image upload ----------------
+st.header("📤 Upload Lake Monitoring Images")
 
-uploaded_file = st.file_uploader(
-    "Upload a lake image",
-    type=["jpg", "jpeg", "png"]
-)
+col_ref, col_current = st.columns(2)
 
-if uploaded_file is not None:
+with col_ref:
+    reference_file = st.file_uploader(
+        "Reference Lake Image",
+        type=["jpg", "jpeg", "png"],
+        key="reference"
+    )
 
-    image = Image.open(uploaded_file).convert("RGB")
+with col_current:
+    current_file = st.file_uploader(
+        "Current Lake Image",
+        type=["jpg", "jpeg", "png"],
+        key="current"
+    )
 
-    if max(image.size) > 1000:
-        image.thumbnail((1000, 1000))
+# ---------------- Functions ----------------
+def resize_image(image, max_size=900):
+    if max(image.size) > max_size:
+        image.thumbnail((max_size, max_size))
+    return image
 
-    arr = np.array(image)
-    total_pixels = arr.shape[0] * arr.shape[1]
 
-    r = arr[:, :, 0].astype(int)
-    g = arr[:, :, 1].astype(int)
-    b = arr[:, :, 2].astype(int)
+def extract_lake_mask(image):
+    img = np.array(image)
+    hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
 
-    # ---------------- AI analysis ----------------
-    algae_mask = (g > r + 20) & (g > b + 20)
-    algae_percent = (np.sum(algae_mask) / total_pixels) * 100
+    lower = np.array([35, 30, 30])
+    upper = np.array([95, 255, 255])
 
-    gray = np.array(image.convert("L"))
-    brightness = np.mean(gray)
-    clarity_score = 100 - brightness
+    mask = cv2.inRange(hsv, lower, upper)
 
-    waste_mask = gray < 70
-    waste_percent = (np.sum(waste_mask) / total_pixels) * 100
+    kernel = np.ones((7, 7), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
 
-    muddy_mask = (r > b + 25) & (g > b + 15)
-    muddy_percent = (np.sum(muddy_mask) / total_pixels) * 100
+    contours, _ = cv2.findContours(
+        mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
 
-    algae_threshold = algae_sensitivity * 3
-    waste_threshold = 15 - waste_sensitivity
-    murky_threshold = 100 - murky_sensitivity * 5
+    lake_mask = np.zeros_like(mask)
+
+    if contours:
+        largest = max(contours, key=cv2.contourArea)
+        cv2.drawContours(lake_mask, [largest], -1, 255, thickness=cv2.FILLED)
+
+    return lake_mask, mask
+
+
+def analyze_lake(image, lake_mask):
+    img = np.array(image)
+    total_pixels = np.count_nonzero(lake_mask)
+
+    if total_pixels == 0:
+        return {
+            "algae": 0,
+            "waste": 0,
+            "murky": 0,
+            "lake_area": 0
+        }
+
+    r = img[:, :, 0].astype(int)
+    g = img[:, :, 1].astype(int)
+    b = img[:, :, 2].astype(int)
+
+    algae_mask = (g > r + 20) & (g > b + 20) & (lake_mask > 0)
+    waste_mask = (cv2.cvtColor(img, cv2.COLOR_RGB2GRAY) < 70) & (lake_mask > 0)
+    murky_mask = (r > b + 25) & (g > b + 15) & (lake_mask > 0)
+
+    return {
+        "algae": (np.sum(algae_mask) / total_pixels) * 100,
+        "waste": (np.sum(waste_mask) / total_pixels) * 100,
+        "murky": (np.sum(murky_mask) / total_pixels) * 100,
+        "lake_area": total_pixels
+    }
+
+
+def detect_encroachment(reference_image, current_image):
+    ref_mask, _ = extract_lake_mask(reference_image)
+    cur_mask, _ = extract_lake_mask(current_image)
+
+    ref_area = np.count_nonzero(ref_mask)
+    cur_area = np.count_nonzero(cur_mask)
+
+    if ref_area == 0:
+        return 0, False, ref_mask, cur_mask
+
+    reduction = ((ref_area - cur_area) / ref_area) * 100
+
+    return max(reduction, 0), reduction > 0, ref_mask, cur_mask
+
+
+def sensor_anomaly_score(ph, turbidity, do, temperature):
+    data = np.array([
+        [7.2, 20, 7.5, 26],
+        [7.0, 25, 7.0, 27],
+        [7.4, 30, 6.8, 28],
+        [6.8, 35, 6.5, 29],
+        [7.1, 28, 7.2, 26],
+        [ph, turbidity, do, temperature]
+    ])
+
+    model = IsolationForest(
+        contamination=0.25,
+        random_state=42
+    )
+
+    model.fit(data)
+    score = model.decision_function(data)[-1]
+
+    return max(0, round((0.5 - score) * 100, 1))
+
+# ---------------- Main analysis ----------------
+if current_file is not None:
+
+    current_image = resize_image(Image.open(current_file).convert("RGB"))
+    current_arr = np.array(current_image)
+
+    lake_mask, raw_mask = extract_lake_mask(current_image)
+    metrics = analyze_lake(current_image, lake_mask)
+
+    encroachment_percent = 0
+    encroachment_detected = False
+    reference_image = None
+
+    if reference_file is not None:
+        reference_image = resize_image(Image.open(reference_file).convert("RGB"))
+        encroachment_percent, encroachment_detected, ref_mask, cur_mask = detect_encroachment(
+            reference_image,
+            current_image
+        )
+
+    sensor_score = sensor_anomaly_score(
+        ph_value,
+        turbidity,
+        dissolved_oxygen,
+        temperature
+    )
 
     # ---------------- Alerts ----------------
-    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     alerts = []
 
-    if algae_percent > algae_threshold:
+    if metrics["algae"] > algae_threshold:
         alerts.append({
-            "Time": current_time,
+            "Alert ID": f"LK-{int(time.time())}-A",
+            "Time": now,
             "Lake": lake_name,
             "Source": input_source,
-            "Violation": "Possible Algae Growth",
+            "Violation": "Algae Bloom Detected",
             "Severity": "High",
-            "Detected Value": f"{algae_percent:.2f}% green coverage",
-            "Recommended Action": "Send inspection team and collect water sample",
+            "Value": f"{metrics['algae']:.2f}% algae coverage",
+            "Action": "Collect water sample and inspect nutrient inflow",
             "Status": "Pending"
         })
 
-    if waste_percent > waste_threshold:
+    if metrics["waste"] > waste_threshold:
         alerts.append({
-            "Time": current_time,
+            "Alert ID": f"LK-{int(time.time())}-W",
+            "Time": now,
             "Lake": lake_name,
             "Source": input_source,
-            "Violation": "Possible Floating Waste Detected",
+            "Violation": "Floating Waste Detected",
             "Severity": "High",
-            "Detected Value": f"{waste_percent:.2f}% dark floating regions",
-            "Recommended Action": "Deploy cleanup team and verify waste type",
+            "Value": f"{metrics['waste']:.2f}% suspected waste coverage",
+            "Action": "Deploy cleanup team and identify waste source",
             "Status": "Pending"
         })
 
-    if clarity_score > murky_threshold:
+    if metrics["murky"] > 30:
         alerts.append({
-            "Time": current_time,
+            "Alert ID": f"LK-{int(time.time())}-M",
+            "Time": now,
             "Lake": lake_name,
             "Source": input_source,
-            "Violation": "Murky / Low-Clarity Water",
+            "Violation": "Sediment / Muddy Water Detected",
             "Severity": "Medium",
-            "Detected Value": f"Clarity score: {clarity_score:.1f}",
-            "Recommended Action": "Check turbidity and possible contamination",
+            "Value": f"{metrics['murky']:.2f}% muddy coverage",
+            "Action": "Inspect nearby construction and soil erosion",
             "Status": "Pending"
         })
 
-    if muddy_percent > 30:
+    if encroachment_detected and encroachment_percent > encroachment_threshold:
         alerts.append({
-            "Time": current_time,
+            "Alert ID": f"LK-{int(time.time())}-E",
+            "Time": now,
             "Lake": lake_name,
-            "Source": input_source,
-            "Violation": "Possible Muddy / Sediment Pollution",
-            "Severity": "Medium",
-            "Detected Value": f"{muddy_percent:.2f}% muddy coverage",
-            "Recommended Action": "Inspect nearby construction or soil erosion",
+            "Source": "Change Detection",
+            "Violation": "Possible Lake Encroachment",
+            "Severity": "High",
+            "Value": f"{encroachment_percent:.2f}% water-area reduction",
+            "Action": "Verify land records and conduct field survey",
+            "Status": "Pending"
+        })
+
+    if sensor_score > 50:
+        alerts.append({
+            "Alert ID": f"LK-{int(time.time())}-S",
+            "Time": now,
+            "Lake": lake_name,
+            "Source": "IoT Anomaly Detection",
+            "Violation": "Abnormal Water-Quality Pattern",
+            "Severity": "High",
+            "Value": f"Anomaly score: {sensor_score}",
+            "Action": "Validate sensors and investigate pollution source",
             "Status": "Pending"
         })
 
     if ph_value < 6.5 or ph_value > 8.5:
         alerts.append({
-            "Time": current_time,
+            "Alert ID": f"LK-{int(time.time())}-PH",
+            "Time": now,
             "Lake": lake_name,
             "Source": "IoT Sensor",
             "Violation": "Abnormal pH Level",
             "Severity": "Medium",
-            "Detected Value": f"pH {ph_value}",
-            "Recommended Action": "Validate sensor and inspect lake",
+            "Value": f"pH {ph_value}",
+            "Action": "Validate sensor and inspect lake",
             "Status": "Pending"
         })
 
     if turbidity > 50:
         alerts.append({
-            "Time": current_time,
+            "Alert ID": f"LK-{int(time.time())}-T",
+            "Time": now,
             "Lake": lake_name,
             "Source": "IoT Sensor",
             "Violation": "High Turbidity",
             "Severity": "Medium",
-            "Detected Value": f"{turbidity} NTU",
-            "Recommended Action": "Check sediment inflow and pollution source",
+            "Value": f"{turbidity} NTU",
+            "Action": "Check sediment inflow and pollution source",
             "Status": "Pending"
         })
 
     if dissolved_oxygen < 4:
         alerts.append({
-            "Time": current_time,
+            "Alert ID": f"LK-{int(time.time())}-DO",
+            "Time": now,
             "Lake": lake_name,
             "Source": "IoT Sensor",
             "Violation": "Low Dissolved Oxygen",
             "Severity": "High",
-            "Detected Value": f"{dissolved_oxygen} mg/L",
-            "Recommended Action": "Check aquatic health and pollution source",
+            "Value": f"{dissolved_oxygen} mg/L",
+            "Action": "Check aquatic health and pollution source",
             "Status": "Pending"
         })
 
     if not alerts:
         alerts.append({
-            "Time": current_time,
+            "Alert ID": f"LK-{int(time.time())}-N",
+            "Time": now,
             "Lake": lake_name,
             "Source": input_source,
             "Violation": "No Major Violation Detected",
             "Severity": "Low",
-            "Detected Value": "Lake appears normal",
-            "Recommended Action": "Continue routine monitoring",
+            "Value": "Lake appears normal",
+            "Action": "Continue routine monitoring",
             "Status": "Pending"
         })
 
-    st.session_state.alert_history.extend(alerts)
+    st.session_state.alerts.extend(alerts)
 
     # ---------------- Risk score ----------------
+    waste_score = min(metrics["waste"] * 2, 100)
+    algae_score = min(metrics["algae"] * 2, 100)
+    encroachment_score = min(encroachment_percent * 3, 100)
+    human_activity_score = 0
+
     risk_score = min(
         round(
-            (algae_percent / 3) +
-            (waste_percent / 2) +
-            (clarity_score / 2.5) +
-            (len([a for a in alerts if a["Source"] == "IoT Sensor"]) * 5),
+            (0.30 * waste_score) +
+            (0.25 * algae_score) +
+            (0.20 * encroachment_score) +
+            (0.15 * sensor_score) +
+            (0.10 * human_activity_score),
             1
         ),
         100
@@ -251,224 +360,8 @@ if uploaded_file is not None:
         risk_level = "LOW RISK"
 
     # ---------------- Dashboard ----------------
-    st.header("📊 Lake Monitoring Dashboard")
+    st.header("📊 Advanced Lake Monitoring Dashboard")
 
     m1, m2, m3, m4 = st.columns(4)
 
-    m1.metric("AI Risk Score", f"{risk_score}/100", risk_level)
-    m2.metric("Algae Coverage", f"{algae_percent:.2f}%")
-    m3.metric("Waste Indicator", f"{waste_percent:.2f}%")
-    m4.metric("Active Alerts", len(alerts))
-
-    m5, m6, m7, m8 = st.columns(4)
-
-    m5.metric("Water Clarity Score", f"{clarity_score:.1f}")
-    m6.metric("Muddy Coverage", f"{muddy_percent:.2f}%")
-    m7.metric("Turbidity", f"{turbidity} NTU")
-    m8.metric("Dissolved Oxygen", f"{dissolved_oxygen} mg/L")
-
-    # ---------------- Tabs ----------------
-    tab1, tab2, tab3, tab4 = st.tabs(
-        [
-            "🔍 AI Image Analysis",
-            "🚨 Enforcement Alerts",
-            "📡 Sensor Monitoring",
-            "📄 Report & Map"
-        ]
-    )
-
-    # ---------------- Tab 1 ----------------
-    with tab1:
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.subheader("📸 Uploaded Lake Image")
-            st.image(image, use_container_width=True)
-
-        with col2:
-            st.subheader("🧠 AI Detection Overlay")
-
-            analysis = arr.copy()
-            analysis[algae_mask] = [255, 0, 0]
-            analysis[waste_mask] = [0, 0, 255]
-
-            st.image(analysis, use_container_width=True)
-            st.caption(
-                "Red = possible algae | Blue = possible floating waste / dark objects"
-            )
-
-        st.subheader("📈 Environmental Indicators")
-
-        chart_data = pd.DataFrame(
-            {
-                "Indicator": [
-                    "Algae Coverage",
-                    "Waste Indicator",
-                    "Muddy Coverage",
-                    "Water Clarity Risk"
-                ],
-                "Value": [
-                    round(algae_percent, 2),
-                    round(waste_percent, 2),
-                    round(muddy_percent, 2),
-                    round(clarity_score, 2)
-                ]
-            }
-        )
-
-        st.bar_chart(chart_data.set_index("Indicator"))
-
-    # ---------------- Tab 2 ----------------
-    with tab2:
-
-        st.subheader("🚨 Current Enforcement Alerts")
-
-        alert_df = pd.DataFrame(alerts)
-
-        for _, row in alert_df.iterrows():
-
-            if row["Severity"] == "High":
-                st.markdown(
-                    f"""
-                    <div class="alert-high">
-                        <b>🔴 HIGH:</b> {row['Violation']}<br>
-                        <b>Source:</b> {row['Source']}<br>
-                        <b>Detected:</b> {row['Detected Value']}<br>
-                        <b>Action:</b> {row['Recommended Action']}
-                    </div>
-                    <br>
-                    """,
-                    unsafe_allow_html=True
-                )
-
-            elif row["Severity"] == "Medium":
-                st.markdown(
-                    f"""
-                    <div class="alert-medium">
-                        <b>🟠 MEDIUM:</b> {row['Violation']}<br>
-                        <b>Source:</b> {row['Source']}<br>
-                        <b>Detected:</b> {row['Detected Value']}<br>
-                        <b>Action:</b> {row['Recommended Action']}
-                    </div>
-                    <br>
-                    """,
-                    unsafe_allow_html=True
-                )
-
-            else:
-                st.markdown(
-                    f"""
-                    <div class="alert-low">
-                        <b>🟢 LOW:</b> {row['Violation']}<br>
-                        <b>Source:</b> {row['Source']}<br>
-                        <b>Detected:</b> {row['Detected Value']}<br>
-                        <b>Action:</b> {row['Recommended Action']}
-                    </div>
-                    <br>
-                    """,
-                    unsafe_allow_html=True
-                )
-
-        st.subheader("🗂️ Alert History")
-
-        history_df = pd.DataFrame(st.session_state.alert_history)
-        st.dataframe(history_df, use_container_width=True)
-
-    # ---------------- Tab 3 ----------------
-    with tab3:
-
-        st.subheader("📡 IoT Water-Quality Monitoring")
-
-        s1, s2, s3, s4 = st.columns(4)
-
-        s1.metric("pH Level", f"{ph_value}", "Normal: 6.5 - 8.5")
-        s2.metric("Turbidity", f"{turbidity} NTU", "Normal: below 50")
-        s3.metric("Dissolved Oxygen", f"{dissolved_oxygen} mg/L", "Normal: above 4")
-        s4.metric("Water Level", f"{water_level}%")
-
-        st.subheader("💧 Water Level")
-        st.progress(water_level / 100)
-
-        st.subheader("🧪 Sensor Alerts")
-
-        sensor_alerts = [
-            a for a in alerts
-            if a["Source"] == "IoT Sensor"
-        ]
-
-        if sensor_alerts:
-            for a in sensor_alerts:
-                st.warning(f"⚠️ {a['Violation']}")
-        else:
-            st.success("All sensor readings are normal.")
-
-        st.subheader("📊 Sensor Values")
-
-        sensor_chart = pd.DataFrame(
-            {
-                "Parameter": [
-                    "pH",
-                    "Turbidity",
-                    "Dissolved Oxygen",
-                    "Water Level"
-                ],
-                "Value": [
-                    ph_value,
-                    turbidity,
-                    dissolved_oxygen,
-                    water_level
-                ]
-            }
-        )
-
-        st.bar_chart(sensor_chart.set_index("Parameter"))
-
-    # ---------------- Tab 4 ----------------
-    with tab4:
-
-        st.subheader("📄 Lake Enforcement Report")
-
-        st.markdown(f"""
-        **Lake Name:** {lake_name}  
-        **Location:** {location}  
-        **Coordinates:** {latitude}, {longitude}  
-        **Input Source:** {input_source}  
-        **Analysis Time:** {current_time}  
-        **AI Risk Score:** {risk_score}/100  
-        **Risk Level:** {risk_level}  
-        """)
-
-        st.subheader("📍 Lake Location Map")
-
-        map_data = pd.DataFrame(
-            {
-                "lat": [latitude],
-                "lon": [longitude]
-            }
-        )
-
-        st.map(map_data, zoom=12)
-
-        st.subheader("⬇️ Download Report")
-
-        csv_data = pd.DataFrame(st.session_state.alert_history).to_csv(
-            index=False
-        ).encode()
-
-        st.download_button(
-            label="Download Full Enforcement Report",
-            data=csv_data,
-            file_name=f"lake_enforcement_report_{int(time.time())}.csv",
-            mime="text/csv"
-        )
-
-else:
-    st.info("Upload a lake image to begin AI-based enforcement analysis.")
-
-# ---------------- Footer ----------------
-st.markdown("---")
-st.caption(
-    "AI Lake Enforcement System | Image-processing-based environmental monitoring | "
-    "Can be extended with drones, CCTV, satellite imagery, and government dashboards."
-)
+    m1.metric("AI
